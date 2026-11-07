@@ -20,6 +20,7 @@ class Setup:
     short_target: float | None = None
     trend_target: float | None = None
     confluence: bool = False
+    market_support: tuple[float, float] | None = None
 
 
 def regime_of(candles: list[Candle], sma: dict[int, list[float]]) -> str:
@@ -73,19 +74,21 @@ def analyze(candles: list[Candle], sma: dict[int, list[float]],
     supports = pivot_zones(candles[-180:], atr, lows=True)
     resistances = pivot_zones(candles[-180:], atr, lows=False)
     support = max((zone for zone in supports if zone[1] < anchor), default=None)
+    market_support = max((zone for zone in supports if zone[1] < close), default=None)
     resistance = min((low for low, _ in resistances if low > close), default=None)
     distance = (close - anchor) / close
     facts = (regime, relative_volume, support, resistance, distance)
     if not (market_bullish and regime == "BULLISH" and close > anchor
             and close > sma[120][-1] and support):
-        return Setup(*facts)
+        return Setup(*facts, market_support=market_support)
 
     stop, entry2 = support
     if stop >= entry2:
-        return Setup(*facts)
+        return Setup(*facts, market_support=market_support)
     # The 40:60 allocation is by quote budget, so divide total cost by total quantity.
     average = 1 / (0.4 / anchor + 0.6 / entry2)
-    short = min((sma[n][-1] for n in (7, 21, 120) if sma[n][-1] > close), default=None)
+    short = min((level for level in (sma[7][-1], sma[21][-1], sma[120][-1], resistance)
+                 if level is not None and level > close), default=None)
     floor = max(close, short or close)
     long_levels = [sma[224][-1], sma[365][-1], daily_sma[60][-1], daily_sma[365][-1]]
     above = [level for level in long_levels if level > floor]
@@ -95,4 +98,5 @@ def analyze(candles: list[Candle], sma: dict[int, list[float]],
     ]
     trend = min(overlap or above, default=None)
     return Setup(*facts, entry1=anchor, entry2=entry2, average=average, stop=stop,
-                 short_target=short, trend_target=trend, confluence=bool(overlap))
+                 short_target=short, trend_target=trend, confluence=bool(overlap),
+                 market_support=market_support)

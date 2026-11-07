@@ -11,6 +11,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 
@@ -24,10 +25,28 @@ UP, DOWN = "#38ffb1", "#ff5684"
 COLORS = {7: "#20ebff", 21: "#ffdb55", 60: "#c189ff",
           120: "#ff9c54", 224: "#79a8ff", 365: "#ff6fcd"}
 REGIME_COLORS = {"BULLISH": UP, "BEARISH": DOWN, "COMPRESSED": "#ffdb55", "MIXED": MUTED}
+REGIME_LABELS = {"BULLISH": "정배열 추세", "BEARISH": "역배열 조정",
+                 "COMPRESSED": "응축 · 박스권", "MIXED": "혼조 · 방향 확인"}
 
 
 def price(value: float | None) -> str:
     return f"{value:,.2f}" if value is not None else "—"
+
+
+def configure_font() -> None:
+    fonts = (
+        Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "malgun.ttf",
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/System/Library/Fonts/AppleSDGothicNeo.ttc"),
+    )
+    for font in fonts:
+        if font.is_file():
+            font_manager.fontManager.addfont(font)
+            matplotlib.rcParams["font.family"] = [
+                font_manager.FontProperties(fname=font).get_name(), "DejaVu Sans"
+            ]
+            return
+    raise RuntimeError("Korean chart font unavailable. Install fonts-noto-cjk on Linux.")
 
 
 def style_axis(ax) -> None:
@@ -66,7 +85,8 @@ def date_ticks(ax, interval: int) -> None:
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d", tz=JST))
 
 
-def add_setup_card(ax, setup: Setup) -> None:
+def add_setup_card(ax, setup: Setup, close: float, sma: dict, daily_sma: dict,
+                   market: str) -> None:
     ax.set_facecolor(PANEL)
     ax.set_xticks([])
     ax.set_yticks([])
@@ -78,22 +98,53 @@ def add_setup_card(ax, setup: Setup) -> None:
                 fontweight=weight, va="center")
 
     valid = setup.entry1 is not None
-    line(.04, .84, "CONDITIONAL LONG" if valid else "WATCH  /  NO VALID LONG",
-         UP if valid else MUTED, 10, "bold")
-    volume = f"{setup.relative_volume:.2f}×" if setup.relative_volume is not None else "—"
-    line(.04, .64, f"4H volume / prior 20-bar avg  {volume}")
+    anchor, defense = sma[60][-1], sma[120][-1]
+    gap = (close / anchor - 1) * 100
     if valid:
-        line(.04, .44, f"Entry 1 (40%)  {price(setup.entry1)}    Entry 2 (60%)  {price(setup.entry2)}", TEXT)
-        line(.04, .25, f"Avg  {price(setup.average)}    Invalidate on 4H close < {price(setup.stop)}", TEXT)
-        marker = "*" if setup.confluence else ""
-        line(.04, .09, f"Short TP  {price(setup.short_target)}    Trend TP  {price(setup.trend_target)}{marker}")
+        reason = "BTC·종목 정배열 / 60·120선 위 / 하단 지지 확인"
+    elif market != "BULLISH":
+        reason = "BTC 정배열 확인 대기"
+    elif setup.regime != "BULLISH":
+        reason = "종목 7·21·60 정배열 확인 대기"
+    elif close <= max(anchor, defense):
+        reason = "4H 종가의 60·120선 회복 대기"
     else:
-        support = " — ".join(map(price, setup.support)) if setup.support else "—"
-        line(.04, .42, f"Support below 4H SMA 60  {support}", TEXT)
-        line(.04, .21, f"Pivot resistance above close  {price(setup.resistance)}", TEXT)
+        reason = "SMA 60 아래 반복 저점 확인 대기"
+    volume = f"{setup.relative_volume:.2f}×" if setup.relative_volume is not None else "—"
+    support = " ~ ".join(map(price, setup.market_support)) if setup.market_support else "—"
+    confluence = setup.market_support and setup.market_support[0] <= anchor <= setup.market_support[1]
+    support_label = "지지 · 60선 중첩" if confluence else "현가 아래 지지"
+    line(.04, .945, "조건부 분할 매수" if valid else "관망 · 롱 조건 미충족",
+         UP if valid else MUTED, 13, "bold")
+    line(.04, .874, f"{reason}   |   상대 거래량 {volume}", TEXT)
+    line(.04, .793, f"4H SMA 60  {price(anchor)} ({gap:+.2f}%)   /   120  {price(defense)}")
+    line(.04, .729, f"일봉 SMA 60  {price(daily_sma[60][-1])}   /   365  {price(daily_sma[365][-1])}")
+    line(.04, .665, f"{support_label}  {support}   /   상단 저항  {price(setup.resistance)}")
+
+    ax.axhline(.614, xmin=.04, xmax=.96, color=GRID, lw=.7)
+    line(.04, .558, "분할 진입 · 익절 · 무효화", COLORS[7], 10, "bold")
+    line(.04, .482, f"1차 SMA 60 (40%)  {price(setup.entry1)}   /   2차 매물대 (60%)  {price(setup.entry2)}", TEXT)
+    invalidation = f"4H 종가 < {price(setup.stop)}" if valid else "—"
+    line(.04, .410, f"예상 평단  {price(setup.average)}   /   무효화  {invalidation}", TEXT)
+    marker = "*" if setup.confluence else ""
+    line(.04, .338, f"단기 익절 (50%+)  {price(setup.short_target)}   /   추세 익절  {price(setup.trend_target)}{marker}", TEXT)
+
+    ax.axhline(.280, xmin=.04, xmax=.96, color=GRID, lw=.7)
+    line(.04, .222, "다음 4H 마감에서 볼 조건", COLORS[7], 10, "bold")
+    if valid:
+        upside = (f"상방  {price(setup.resistance)} 저항 돌파 확인"
+                  if setup.resistance is not None else "상방  7·21·60 정배열 및 120선 지지 유지")
+    else:
+        upside = "회복  60·120선 위 마감 및 BTC·종목 정배열 확인"
+    downside = setup.stop if valid else (setup.market_support[0] if setup.market_support else None)
+    downside_action = "진입 계획 무효" if valid else "관망 유지"
+    line(.04, .151, upside)
+    line(.04, .078, f"하방  {price(downside)} 아래 마감 시 {downside_action}" if downside is not None
+         else f"하방  확인된 반복 저점 지지 없음 · {downside_action}")
 
 
 def render(path: Path, data: dict, averages: dict) -> None:
+    configure_font()
     market = regime_of(data["BTC", "4H"], averages["BTC", "4H"])
     setups = {
         symbol: analyze(data[symbol, "4H"], averages[symbol, "4H"],
@@ -101,22 +152,26 @@ def render(path: Path, data: dict, averages: dict) -> None:
         for symbol in SYMBOLS
     }
     candidate = min((s for s in SYMBOLS if setups[s].entry1 is not None),
-                    key=lambda s: setups[s].distance, default="NONE")
+                    key=lambda s: setups[s].distance, default="없음")
     close_time = utc_time(data["BTC", "4H"][-1].ts + BAR_MS["4H"]).astimezone(JST)
-    fig = plt.figure(figsize=(18, 11), facecolor=BG)
-    grid = fig.add_gridspec(4, 3, height_ratios=(3.25, .72, 2.10, 1.25),
-                            left=.043, right=.954, top=.805, bottom=.084,
-                            hspace=.45, wspace=.26)
-    fig.text(.043, .957, "MATSU2   /   OKX SPOT MARKET", color=COLORS[7], fontsize=11,
+    daily_time = utc_time(data["BTC", "1Dutc"][-1].ts + BAR_MS["1Dutc"]).astimezone(JST)
+    fig = plt.figure(figsize=(19, 13), facecolor=BG)
+    grid = fig.add_gridspec(4, 3, height_ratios=(2.4, .58, 1.35, 2.85),
+                            left=.041, right=.958, top=.806, bottom=.066,
+                            hspace=.38, wspace=.21)
+    fig.text(.041, .960, "MATSU2   /   OKX 현물  ·  BTC / ETH / SOL", color=COLORS[7], fontsize=11,
              fontweight="bold")
-    fig.text(.042, .908, "Trend Dashboard", color=TEXT, fontsize=31, fontweight="bold")
-    fig.text(.954, .954, f"BTC 4H CLOSE   {close_time:%Y-%m-%d  %H:%M JST}",
+    fig.text(.040, .910, "눌림목 진입조건", color=TEXT, fontsize=32, fontweight="bold")
+    fig.text(.958, .960, f"확정봉 마감  |  4H {close_time:%Y-%m-%d %H:%M}   ·   일봉 {daily_time:%m-%d %H:%M} KST",
              ha="right", color=MUTED, fontsize=11)
-    fig.text(.954, .914, f"BTC REGIME  {market}     /     TOP PULLBACK  {candidate}",
-             ha="right", color=REGIME_COLORS[market], fontsize=11, fontweight="bold")
+    fig.text(.958, .921, f"BTC {REGIME_LABELS[market]}     /     최우선 롱 후보 {candidate}",
+             ha="right", color=REGIME_COLORS[market], fontsize=15, fontweight="bold")
+    btc_sma = averages["BTC", "4H"]
+    fast_values = "   ·   ".join(f"SMA {n}  {price(btc_sma[n][-1])}" for n in (7, 21, 60))
+    fig.text(.958, .887, fast_values, ha="right", color=MUTED, fontsize=10)
     handles = [Line2D([0], [0], color=color, lw=2, label=f"SMA {period}")
                for period, color in COLORS.items()]
-    fig.legend(handles=handles, ncol=6, loc="upper left", bbox_to_anchor=(.04, .892),
+    fig.legend(handles=handles, ncol=6, loc="upper left", bbox_to_anchor=(.035, .890),
                frameon=False, labelcolor=MUTED, fontsize=9)
 
     for column, symbol in enumerate(SYMBOLS):
@@ -126,9 +181,9 @@ def render(path: Path, data: dict, averages: dict) -> None:
         times, colors = draw_price(chart, candles, averages[symbol, "4H"], 120, setup)
         chart.set_title(f"{symbol} / USDT   ·   {price(candles[-1].close)}", loc="left",
                         color=TEXT, fontsize=16, pad=10, fontweight="bold")
-        chart.set_title(setup.regime, loc="right", color=REGIME_COLORS[setup.regime],
+        chart.set_title(REGIME_LABELS[setup.regime], loc="right", color=REGIME_COLORS[setup.regime],
                         fontsize=9, pad=12, fontweight="bold")
-        chart.text(.025, .95, "4H  /  120 BARS", transform=chart.transAxes, va="top",
+        chart.text(.025, .95, "4시간봉 · 120개", transform=chart.transAxes, va="top",
                    color=MUTED, fontsize=8,
                    bbox={"facecolor": PANEL, "edgecolor": "none", "alpha": .85})
         chart.tick_params(labelbottom=False)
@@ -140,22 +195,23 @@ def render(path: Path, data: dict, averages: dict) -> None:
         volume.yaxis.set_major_locator(MaxNLocator(3))
         volume.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:g}M"))
         date_ticks(volume, 4)
-        volume.set_title("4H QUOTE VOLUME  /  USDT", loc="left", color=MUTED, fontsize=8)
+        volume.set_title("4시간봉 거래량  /  USDT", loc="left", color=MUTED, fontsize=8)
 
         daily = fig.add_subplot(grid[2, column])
         draw_price(daily, data[symbol, "1Dutc"], averages[symbol, "1Dutc"], 150)
         date_ticks(daily, 30)
-        daily.set_title("1D UTC  /  150 BARS  /  SMA 60 & 365", loc="left",
+        daily.set_title("UTC 일봉 · 150개  /  SMA 60·365", loc="left",
                         color=MUTED, fontsize=8)
-        add_setup_card(fig.add_subplot(grid[3, column]), setup)
+        add_setup_card(fig.add_subplot(grid[3, column]), setup, candles[-1].close,
+                       averages[symbol, "4H"], averages[symbol, "1Dutc"], market)
 
-    fig.text(.043, .038, "SOURCE  OKX Global  /  Closed candles only  /  Axis dates in JST",
+    fig.text(.041, .033, "OKX Global · 확정봉만 사용   /   가격 USDT   /   상대 거래량은 직전 20봉 평균 대비",
              color=MUTED, fontsize=9)
-    fig.text(.954, .038, "*  Long SMA overlaps a 4H pivot resistance zone",
+    fig.text(.958, .033, "—  조건 미충족 또는 해당 수준 없음   ·   *  장기 SMA와 4H 매물대 저항 중첩",
              ha="right", color=MUTED, fontsize=9)
     fig.savefig(path / "dashboard.png", dpi=160, facecolor=BG)
     fig.savefig(path / "dashboard.pdf", facecolor=BG,
-                metadata={"Title": "Matsu2 OKX Trend Dashboard", "Author": "Matsu2"})
+                metadata={"Title": "Matsu2 OKX Pullback Entry Dashboard", "Author": "Matsu2"})
     plt.close(fig)
 
 
