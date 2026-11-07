@@ -33,7 +33,7 @@ jobs:
       - name: Collect actual OKX data and build dashboard
         run: python dashboard.py
       - name: Upload CSV, PNG and PDF
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: okx-dashboard
           path: output/
