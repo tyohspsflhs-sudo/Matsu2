@@ -1,30 +1,60 @@
 # Matsu2
 
-OKX BTC·ETH·SOL 시장 데이터 대시보드입니다.
+OKX BTC·ETH·SOL 현물 가격으로 4시간봉 원웨이 전략의 방향과 조건부 진입 가격을 계산합니다. 숏 신호와 보유 상태는 같은 현물 시계열을 사용한 분석 및 모의 추적입니다.
 
 ## 실행 및 결과 확인
 
-- GitHub Actions의 **OKX market dashboard**에서 성공한 실행을 열고 **Artifacts → okx-dashboard**를 내려받습니다. 압축 파일에 종목별 CSV 6개, `dashboard.png`, `dashboard.pdf`가 들어 있습니다. 실행별 보관 기간은 90일입니다.
-- 일본시간 매일 **00:00 · 04:00 · 08:00 · 12:00 · 16:00 · 20:00**에 예약됩니다. GitHub 대기열에 따라 지연될 수 있습니다. **Run workflow**로 수동 실행할 수 있습니다. OKX 4시간봉은 일본시간 01·05·09·13·17·21시에 마감되므로 예약 실행은 그때까지 확정된 최신 봉을 사용합니다.
+- GitHub Actions의 **OKX market dashboard → Artifacts → okx-dashboard**에서 `dashboard.png`, `dashboard.pdf`, `entry_decisions.csv`와 종목별 원본 4H·일봉 CSV 6개를 받습니다. 보관 기간은 90일입니다.
+- KST 매일 **00:00 · 04:00 · 08:00 · 12:00 · 16:00 · 20:00**에 예약됩니다. 4H 봉은 KST 01·05·09·13·17·21시에 마감합니다. 수동 실행에서는 `with_5m`을 선택할 수 있습니다.
+- 4H 및 UTC 00:00 기준 일봉을 각각 600개 수집합니다. 원본 CSV 시각은 봉 시작 UTC, 진입 판단 CSV 시각은 봉 마감 UTC, 차트는 KST입니다. 필수 시계열의 확정 여부, 연속성, 최신성 및 종목 간 시각 일치를 검증한 후 결과를 한 번에 저장합니다.
+- OKX Global 현물 공개 [캔들 이력 API](https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-candlesticks-history)를 사용합니다. API 키 없이 실행합니다.
 
-Python 3.12에서 로컬로 실행하려면 다음 명령을 사용합니다. 실행마다 새 출력 폴더를 지정합니다. 한글 차트에 Windows 맑은 고딕, macOS Apple SD Gothic Neo 또는 Linux `fonts-noto-cjk`가 필요합니다.
+Python 3.12와 한글 글꼴(Windows 맑은 고딕, macOS Apple SD Gothic Neo, Linux `fonts-noto-cjk`)이 필요합니다. 실행마다 새 출력 디렉터리를 지정합니다.
 
 ```sh
 python -m pip install -r requirements.txt
+python -m unittest -v
 python dashboard.py --output output
+python dashboard.py --output output-5m --with-5m --exit-style trend
 ```
 
-## 데이터와 계산 기준
+## 사용자 제공 전략
 
-- OKX Global 현물 `BTC-USDT`, `ETH-USDT`, `SOL-USDT`의 공개 [캔들 이력 API](https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-candlesticks-history)를 사용합니다. API 키는 필요 없습니다.
-- 4시간봉과 UTC 00:00 기준 일봉(`1Dutc`)을 각각 최근 600개씩 가져옵니다. 확정봉만 사용하며 CSV의 시간은 봉 시작 시각(UTC), 대시보드의 날짜와 상단 마감 시각은 일본시간입니다.
-- 4시간봉 SMA는 7·21·60·120·224·365개 **4시간봉** 종가의 단순평균입니다. 일봉 SMA는 60·365개 **일봉** 종가의 단순평균입니다. 초기 계산 구간은 CSV에 빈칸으로 둡니다. 거래량은 현물 기준 자산 수량과 USDT 환산 거래량을 각각 저장합니다.
-- 일시적 오류는 최대 3회 재시도합니다. 조회 실패, 부족하거나 오래된 확정봉, 중간 누락이 있으면 실행을 실패 처리합니다. 여섯 시계열의 검증과 차트 생성이 모두 성공한 경우에만 새 결과를 저장합니다.
+- 현재 버전은 `bitjjang-one-way-v1.0.0`입니다. 진입 판단 CSV에는 평가 시각, 확정봉 마감 시각, 전략 버전과 신규 진입 신호를 기록합니다.
+- SMA7 > SMA21 > SMA60이면 롱만, SMA7 < SMA21 < SMA60이면 숏만 검토합니다. 응축과 발산을 구분하고 이평선에서 멀리 떨어진 가격은 추격하지 않습니다.
+- 4H SMA 7·21·60·120·224·365를 씁니다. 각각 해당 개수의 **4시간봉 종가** 단순평균입니다. 보조 일봉 차트의 SMA60·365는 일봉 개수입니다.
+- 1차는 SMA21 또는 SMA60 지지·저항, 2차는 롱이면 아래 반복 저점 구간, 숏이면 위 반복 고점 구간입니다. 예상 평단은 **USDT 예산 40/60 분할 가정**입니다.
+- 단기 저항·지지와 SMA224·365 및 수평 매물대를 익절 후보로 봅니다. 익절과 무효화는 모두 확정 4H 종가로 판정합니다. 익절 후에는 새 진입 조건을 다시 평가합니다.
+- 5m는 선택적 보조 확인입니다. 비트짱 영상 직접 검증은 미실시했으며 전략 원칙의 출처는 사용자가 제공한 설명입니다.
 
-## 차트의 눌림목 조건
+## 구현 기준 및 수치 가정
 
-- 4시간봉 SMA 7·21·60의 최대 이격이 종가의 0.5% 미만이면 응축으로 분류합니다. 그 외에는 세 선의 배열과 60 SMA의 최근 6봉 기울기를 함께 보고 정배열, 역배열, 혼조를 구분합니다. 상대 거래량은 직전 20개 봉 평균 대비 마지막 확정봉의 USDT 거래량입니다.
-- BTC와 해당 종목이 모두 정배열이고 종가가 해당 종목의 SMA 60·120 위에 있을 때, SMA 60 아래 반복 저점 지지대가 확인된 경우에만 조건부 롱을 표시합니다. 지지·저항은 최근 180개 봉에서 양옆 두 봉보다 낮거나 높은 스윙을 찾고, 최소 두 개의 스윙이 14봉 평균 진폭 안에 모인 구간으로 계산합니다.
-- 1차는 SMA 60, 2차는 지지대의 몸통 경계입니다. USDT 예산을 40:60으로 나눴을 때의 예상 평단을 계산하고, 지지대의 꼬리 하단을 4시간봉 종가로 하회하면 무효로 봅니다. SMA 60과의 비율 거리가 가장 가까운 유효 종목을 상단에 표시합니다.
-- 단기 목표는 종가 위의 가장 가까운 4시간봉 SMA 7·21·120 또는 반복 고점 저항입니다. 추세 목표는 그보다 높은 4시간봉 SMA 224·365와 일봉 SMA 60·365 중 반복 고점 저항과 겹치는 수준을 우선합니다.
-- 한 장짜리 차트에 BTC 장세와 최우선 후보, 종목별 SMA 이격·거래량·지지와 저항, 분할 진입·익절·무효화, 다음 4시간봉의 회복·하방 조건을 표시합니다. 진입 조건을 충족하지 않으면 매매 가격은 대시로 표시하고 관찰 조건을 남깁니다.
+아래 규칙은 전략을 재현 가능하게 만드는 구현 선택입니다. 수익률 최적화나 영상 검증을 거친 수치는 아닙니다.
+
+| 항목 | 판정 |
+| --- | --- |
+| 배열 및 BTC 필터 | 종목과 BTC의 7·21·60 배열이 같은 방향이고, 양쪽 SMA60이 6봉 전 대비 그 방향으로 움직여야 합니다. 양쪽 모두 응축을 벗어나야 하며 해당 종목 종가는 롱이면 SMA60·120 위, 숏이면 아래여야 합니다. |
+| 응축·발산 | 7·21·60 최대와 최소의 차를 종가로 나눕니다. 0.50% 미만이면 응축입니다. 그 외는 6봉 전 대비 +0.10%p 이상 확대 시 발산, −0.10%p 이하 축소 시 수렴, 사이 값이면 유지입니다. 수렴·유지에도 나머지 진입 조건을 평가합니다. |
+| 1차 및 추격 금지 | 종가의 매매 방향 반대편에 있는 SMA21·60을 가까운 순서로 검토하고, 2차 구조가 있는 첫 선을 택합니다. 선택한 SMA 대비 종가 절대 이격이 1.50%를 넘으면 진입을 보류합니다. 진입 가능 종목 중 이격이 가장 작은 종목을 상단에 표시합니다. |
+| 2차 수평 구조 | 최근 180봉에서 양옆 두 봉보다 낮거나 높은 확정 스윙을 찾습니다. 꼬리 가격의 최대 차가 14봉 평균 True Range 이내인 스윙이 두 개 이상이면 구간으로 묶습니다. 몸통 경계의 중앙값을 2차 가격으로, 가장 깊은 꼬리를 구조적 무효화 경계로 사용합니다. 2차 가격은 1차보다 깊고 SMA120보다는 추세 쪽이어야 합니다. |
+| 거래량·5m | 4H는 마지막 봉의 USDT 거래량을 직전 20봉 평균과 비교합니다. 5m 옵션은 종목당 최근 확정봉 60개를 검증하고 최신 5m SMA21 이격과 직전 20봉 대비 거래량을 표시합니다. 거래량과 5m는 참고 값입니다. 미수집이나 수집·검증 실패는 미확인으로 표시하며 성공 시 별도 5m 원본 CSV를 저장합니다. |
+| 평단 | 1차·2차가 모두 제시 가격에서 충족됐다고 가정합니다. 동일 총 USDT 예산에 대해 `1 / (0.40 / 1차 + 0.60 / 2차)`로 계산합니다. |
+| TP | 롱은 확정 종가 위, 숏은 아래만 검토합니다. 단기는 가장 가까운 SMA7·21·120 또는 반복 반대 스윙 구간입니다. 추세는 단기 목표 너머의 SMA224·365 중 반복 스윙 구간과 1 ATR 이내로 겹치는 가격, 그다음 장기 SMA 단독, 그다음 반복 스윙을 찾습니다. 순방향 목표가 없으면 진입을 보류합니다. |
+| SL | 구조 경계와 현재 SMA120 중 먼저 만나는 쪽을 사용합니다. SMA60이 2차 가격 바깥에 있거나 2차 모의 진입 이후 종가가 SMA60의 추세 쪽을 회복한 경우 SMA60도 후보에 넣습니다. 가장 가까운 적용 경계를 롱 종가가 하회하거나 숏 종가가 상회하면 무효화합니다. 장중 꼬리와 경계에 정확히 닿는 종가는 무효화 조건을 충족하지 않습니다. |
+
+## 모의 추적과 화면 해석
+
+- 600봉 구간에서 SMA365가 처음 계산된 확정봉부터 순서대로 평가합니다. 현재 봉에서 만든 계획의 1차 가격은 다음 봉부터 평가하며, 미체결 계획은 매 마감 때 갱신합니다. 모의 진입 이후에는 진입가·목표를 고정하고 매 봉의 SMA로 종가 무효화 수준을 갱신합니다. 추가 진입은 직전 확정봉에서 종목 방향과 BTC 필터가 유지된 경우에 평가합니다.
+- 1·2차 가격 접촉은 확정봉의 고가·저가로 판정합니다. 종가 무효화를 우선합니다. 모의 진입·추가 진입 다음 봉부터 롱 종가가 목표 이상이거나 숏 종가가 목표 이하일 때 해당 종가로 모의 익절합니다. 기본은 단기 목표를 사용하며 `--exit-style trend`로 추세 목표를 우선할 수 있습니다. 선택한 목표가 없으면 다른 목표를 사용합니다. 익절이 확인된 마감에서 새 계획을 평가하며 새 모의 진입은 그 다음 봉부터 가능합니다.
+- CSV의 `entry_signal`은 신규 진입 판단입니다. 모든 조건을 통과한 신규 계획은 LONG 또는 SHORT, 진입 조건 미충족이나 모의 보유 중에는 WAIT입니다. `trend_bias`와 `simulated_position_side`를 별도로 표시합니다. `plan_kind`가 `watch_only`인 가격은 관찰용입니다. 모의 상태는 수집 구간을 매 실행 재생한 결과이며 실제 주문, 수수료, 슬리피지 또는 보유 내역과 연결되지 않습니다.
+
+
+## Experimental Binance spot large-aggregate CVD (not ForeDex)
+
+The workflow now attempts `python binance_cvd.py` after building the OKX dashboard. If Binance is reachable, the artifact includes `binance_btc_large_aggtrade_cvd.csv` and `binance_cvd_metadata.json`. A failure in this experimental step does not fail the main OKX dashboard workflow; absence of these files means the CVD sample was not collected.
+
+- Source: Binance public `/api/v3/aggTrades?symbol=BTCUSDT&limit=1000`, **recent sample only**.
+- Filter: aggregate notional (price × quantity) from 1,000,000 to 10,000,000 USDT. This is a **proposed proxy threshold**, not a verified ForeDex definition.
+- Signed notional: positive when `m=false` (aggressive buy), negative when `m=true` (aggressive sell). The sample cumulative sum starts at zero on every run, so it cannot be compared as a long-term CVD level.
+- Binance aggregated trades are not the same as individual large orders or identified whale accounts. The method cannot reproduce the ForeDex proprietary `Whale (1m-10m)` chart or its 2022/2026 comparison.
+- **No live trading gate** is connected to this proxy. Before using it in risk decisions, implement continuous historical ingestion, deduplication, stable baselines, coverage checks and independent validation against the ForeDex chart. Do not treat missing data as a bullish or neutral signal.

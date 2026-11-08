@@ -2,9 +2,15 @@ name: OKX market dashboard
 
 on:
   schedule:
-    # 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 Asia/Tokyo (UTC+9).
+    # 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 Asia/Seoul (UTC+9).
     - cron: '0 3,7,11,15,19,23 * * *'
+  pull_request:
   workflow_dispatch:
+    inputs:
+      with_5m:
+        description: Include optional OKX 5m data
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -30,9 +36,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends fonts-noto-cjk
           python -m pip install -r requirements.txt
+      - name: Test strategy
+        run: python -m unittest -v
       - name: Collect actual OKX data and build dashboard
-        run: python dashboard.py
-      - name: Upload CSV, PNG and PDF
+        env:
+          WITH_5M: ${{ inputs.with_5m }}
+        run: |
+          args=()
+          if [[ "$WITH_5M" == "true" ]]; then args+=(--with-5m); fi
+          python dashboard.py "${args[@]}"
+      - name: Collect Binance large aggregated-trade CVD sample (experimental)\n        continue-on-error: true\n        run: python binance_cvd.py\n      - name: Upload CSV, PNG and PDF
         uses: actions/upload-artifact@v7
         with:
           name: okx-dashboard
