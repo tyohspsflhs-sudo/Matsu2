@@ -47,3 +47,14 @@ python dashboard.py --output output-5m --with-5m --exit-style trend
 - 600봉 구간에서 SMA365가 처음 계산된 확정봉부터 순서대로 평가합니다. 현재 봉에서 만든 계획의 1차 가격은 다음 봉부터 평가하며, 미체결 계획은 매 마감 때 갱신합니다. 모의 진입 이후에는 진입가·목표를 고정하고 매 봉의 SMA로 종가 무효화 수준을 갱신합니다. 추가 진입은 직전 확정봉에서 종목 방향과 BTC 필터가 유지된 경우에 평가합니다.
 - 1·2차 가격 접촉은 확정봉의 고가·저가로 판정합니다. 종가 무효화를 우선합니다. 모의 진입·추가 진입 다음 봉부터 롱 종가가 목표 이상이거나 숏 종가가 목표 이하일 때 해당 종가로 모의 익절합니다. 기본은 단기 목표를 사용하며 `--exit-style trend`로 추세 목표를 우선할 수 있습니다. 선택한 목표가 없으면 다른 목표를 사용합니다. 익절이 확인된 마감에서 새 계획을 평가하며 새 모의 진입은 그 다음 봉부터 가능합니다.
 - CSV의 `entry_signal`은 신규 진입 판단입니다. 모든 조건을 통과한 신규 계획은 LONG 또는 SHORT, 진입 조건 미충족이나 모의 보유 중에는 WAIT입니다. `trend_bias`와 `simulated_position_side`를 별도로 표시합니다. `plan_kind`가 `watch_only`인 가격은 관찰용입니다. 모의 상태는 수집 구간을 매 실행 재생한 결과이며 실제 주문, 수수료, 슬리피지 또는 보유 내역과 연결되지 않습니다.
+
+
+## Experimental Binance spot large-aggregate CVD (not ForeDex)
+
+The workflow now attempts `python binance_cvd.py` after building the OKX dashboard. If Binance is reachable, the artifact includes `binance_btc_large_aggtrade_cvd.csv` and `binance_cvd_metadata.json`. A failure in this experimental step does not fail the main OKX dashboard workflow; absence of these files means the CVD sample was not collected.
+
+- Source: Binance public `/api/v3/aggTrades?symbol=BTCUSDT&limit=1000`, **recent sample only**.
+- Filter: aggregate notional (price × quantity) from 1,000,000 to 10,000,000 USDT. This is a **proposed proxy threshold**, not a verified ForeDex definition.
+- Signed notional: positive when `m=false` (aggressive buy), negative when `m=true` (aggressive sell). The sample cumulative sum starts at zero on every run, so it cannot be compared as a long-term CVD level.
+- Binance aggregated trades are not the same as individual large orders or identified whale accounts. The method cannot reproduce the ForeDex proprietary `Whale (1m-10m)` chart or its 2022/2026 comparison.
+- **No live trading gate** is connected to this proxy. Before using it in risk decisions, implement continuous historical ingestion, deduplication, stable baselines, coverage checks and independent validation against the ForeDex chart. Do not treat missing data as a bullish or neutral signal.
