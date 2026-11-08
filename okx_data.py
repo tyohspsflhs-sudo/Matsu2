@@ -16,6 +16,7 @@ API_URL = "https://openapi.okx.com/api/v5/market/history-candles"
 SYMBOLS = ("BTC", "ETH", "SOL")
 PERIODS = {"4H": (7, 21, 60, 120, 224, 365), "1Dutc": (60, 365)}
 BAR_MS = {"4H": 14_400_000, "1Dutc": 86_400_000}
+FIVE_MIN_MS = 300_000
 HISTORY_LENGTH = 600
 RETRYABLE_CODES = {"50004", "50011", "50013", "50026", "50040"}
 
@@ -62,7 +63,8 @@ def request_page(symbol: str, bar: str, after: int | None) -> list:
 
 
 def fetch_candles(symbol: str, bar: str, now: datetime) -> list[Candle]:
-    duration = BAR_MS[bar]
+    duration = FIVE_MIN_MS if bar == "5m" else BAR_MS[bar]
+    length = 60 if bar == "5m" else HISTORY_LENGTH
     cutoff = int(now.timestamp() * 1000)
     expected_latest = ((cutoff - 120_000) // duration - 1) * duration
     confirmed = {}
@@ -92,7 +94,7 @@ def fetch_candles(symbol: str, bar: str, now: datetime) -> list[Candle]:
             candle = Candle(ts, *values)
             if confirmed.setdefault(ts, candle) != candle:
                 raise ValueError(f"OKX {symbol} {bar}: conflicting candles at {ts}")
-        if len(confirmed) >= HISTORY_LENGTH:
+        if len(confirmed) >= length:
             break
         oldest = min(timestamps)
         if after is not None and oldest >= after:
@@ -100,8 +102,8 @@ def fetch_candles(symbol: str, bar: str, now: datetime) -> list[Candle]:
         after = oldest
         time.sleep(0.15)
 
-    candles = sorted(confirmed.values(), key=lambda candle: candle.ts)[-HISTORY_LENGTH:]
-    if len(candles) != HISTORY_LENGTH:
+    candles = sorted(confirmed.values(), key=lambda candle: candle.ts)[-length:]
+    if len(candles) != length:
         raise ValueError(f"OKX {symbol} {bar}: only {len(candles)} closed candles")
     if candles[-1].ts < expected_latest:
         raise ValueError(f"OKX {symbol} {bar}: latest closed candle is stale")
