@@ -45,7 +45,7 @@ jobs:
           args=()
           if [[ "$WITH_5M" == "true" ]]; then args+=(--with-5m); fi
           python dashboard.py "${args[@]}"
-      - name: Upload CSV, PNG and PDF
+      - name: Collect Binance large aggregated-trade CVD sample (experimental)\n        continue-on-error: true\n        run: python binance_cvd.py\n      - name: Upload CSV, PNG and PDF
         uses: actions/upload-artifact@v7
         with:
           name: okx-dashboard
