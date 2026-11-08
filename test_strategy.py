@@ -113,7 +113,7 @@ class StrategyTests(unittest.TestCase):
         setup = Setup(trend, {"BTC": (True, "")}, 1, .01, plan)
         candles = [candle(101)] * 364 + [
             candle(101, 99, 103, 1), candle(101, 99, 104, 2),
-            candle(102, 100.5, 103, 3), candle(101, 99, 104, 4),
+            candle(102, 100.5, 105, 3), candle(104, 99, 104, 4),
         ]
         sma = {60: [98] * len(candles), 120: [96] * len(candles)}
         with patch("analysis.analyze_at", return_value=setup):
@@ -123,8 +123,20 @@ class StrategyTests(unittest.TestCase):
             held = replay(candles, sma, [trend] * 4, "trend")
         self.assertEqual((closed.status, closed.last_event, closed.event_ts),
                          ("재진입 후보", "모의 익절", 4))
+        self.assertEqual(closed.entry_signal, "LONG")
+        self.assertEqual(reentered.entry_signal, "WAIT")
         self.assertEqual(reentered.position.first_ts, 5)
         self.assertEqual(held.position.first_ts, 2)
+
+    def test_short_take_profit_requires_close(self):
+        plan = plan_for(-1)
+        pos, _, _ = advance(None, plan, candle(99, 97, 101), 102, 104, "short")
+        pos, event, _ = advance(pos, plan, candle(97, 95, 100), 102, 104, "short")
+        self.assertIsNotNone(pos)
+        self.assertEqual(event, "")
+        pos, event, price = advance(pos, plan, candle(95, 94, 100), 102, 104, "short")
+        self.assertIsNone(pos)
+        self.assertEqual((event, price), ("모의 익절", 95))
 
     def test_missing_5m_is_never_confirmed(self):
         self.assertEqual(five_min_evidence(None)["detail"], "미수집")

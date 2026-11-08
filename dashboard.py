@@ -11,13 +11,14 @@ from tempfile import TemporaryDirectory
 import matplotlib
 
 matplotlib.use("Agg")
+matplotlib.rcParams["pdf.fonttype"] = 42
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 
-from analysis import ARRAY_LABELS, Decision, replay, side_name, trend_at
+from analysis import ARRAY_LABELS, SIGNALS, STRATEGY_VERSION, Decision, replay, side_name, trend_at
 from okx_data import BAR_MS, FIVE_MIN_MS, SYMBOLS, fetch_candles, moving_averages, utc_time, write_csv
 
 KST = timezone(timedelta(hours=9), "KST")
@@ -108,9 +109,10 @@ def add_setup_card(ax, decision: Decision, micro: dict) -> None:
 
     setup, plan = decision.setup, decision.plan
     direction = plan.direction if plan else setup.trend.direction
-    prefix = f"{side_name(direction)} · " if direction else ""
-    line(.951, prefix + decision.status, SIDE_COLORS[direction], 14, "bold")
-    line(.893, "신규 진입 판단  /  최신 확정 4H", COLORS[7], 10, "bold")
+    signal = decision.entry_signal
+    line(.951, f"{signal} · {decision.status}",
+         MUTED if signal == "WAIT" else SIDE_COLORS[direction], 14, "bold")
+    line(.893, f"신규 진입 판단  /  배열 방향 {side_name(setup.trend.direction)}", COLORS[7], 10, "bold")
     for i, (name, (passed, reason)) in enumerate(setup.checks.items()):
         y = .846 - i * .037
         line(y, "충족" if passed else "미충족", UP if passed else DOWN, 8.5)
@@ -120,13 +122,17 @@ def add_setup_card(ax, decision: Decision, micro: dict) -> None:
     line(.540, f"4H 상대 거래량 {volume}  /  이격 변화 {setup.trend.spread_change * 100:+.2f}%p", size=9)
     line(.502, f"5m {micro['status']}  ·  {micro['detail']}", size=9)
     ax.axhline(.471, xmin=.045, xmax=.955, color=GRID, lw=.7)
-    line(.436, "분할 진입 · 익절 · 종가 무효화", COLORS[7], 10, "bold")
+    line(.436, "분할 진입  /  TP·SL은 4H 종가 기준", COLORS[7], 10, "bold")
     if plan:
         label = "모의 보유 계획" if decision.position else "조건부 계획" if setup.ready else "관찰 가격"
-        line(.391, f"{label}  /  1차 SMA{plan.anchor} {price(plan.entry1)}  ·  2차 {price(plan.entry2)}", TEXT, 9)
+        side = side_name(direction)
+        line(.391, f"{side} {label}  /  1차 SMA{plan.anchor} {price(plan.entry1)}  ·  2차 {price(plan.entry2)}", TEXT, 9)
         line(.349, f"예상 평단 {price(plan.average)}  (USDT 예산 40/60 가정)", TEXT, 9)
-        line(.307, f"단기 TP  {price(plan.short_target)}  {plan.short_source}", TEXT, 9)
-        line(.265, f"추세 TP  {price(plan.trend_target)}  {plan.trend_source}", TEXT, 9)
+        tp_operator = "≥" if direction == 1 else "≤"
+        for y, kind, target, source in ((.307, "단기", plan.short_target, plan.short_source),
+                                        (.265, "추세", plan.trend_target, plan.trend_source)):
+            level = f"{tp_operator} {price(target)}  {source}" if target is not None else "—"
+            line(y, f"{kind} TP  {level}", TEXT, 9)
         operator = "<" if plan.direction == 1 else ">"
         line(.223, f"SL  4H 종가 {operator} {price(decision.stop)}  ({decision.stop_source})", TEXT, 9)
         line(.181, f"구조 경계 {price(plan.structural_stop)}  /  2차 구간 {price(plan.zone[0])}~{price(plan.zone[1])}", size=9)
@@ -159,14 +165,23 @@ def five_min_evidence(candles: list | None, failure: str | None = None) -> dict:
             "relative_volume": volume, "error": ""}
 
 
-def decision_rows(data: dict, averages: dict, decisions: dict, micro: dict) -> list[dict]:
+def decision_rows(data: dict, averages: dict, decisions: dict, micro: dict,
+                  started_at: datetime, evaluated_at: datetime) -> list[dict]:
     rows = []
     market = decisions["BTC"].setup.trend
     for symbol, decision in decisions.items():
         setup, plan, position = decision.setup, decision.plan, decision.position
         candle = data[symbol, "4H"][-1]
+        close_time = utc_time(candle.ts + BAR_MS["4H"])
         row = {
             "instrument": f"{symbol}-USDT", "close_time_utc": close_timestamp(candle.ts),
+            "close_time_kst": close_time.astimezone(KST).isoformat(),
+            "strategy_version": STRATEGY_VERSION, "market_data_source": "OKX Global spot",
+            "started_at_kst": started_at.astimezone(KST).isoformat(timespec="seconds"),
+            "evaluated_at_kst": evaluated_at.astimezone(KST).isoformat(timespec="seconds"),
+            "entry_signal": decision.entry_signal,
+            "trend_bias": SIGNALS[setup.trend.direction] if setup.trend.direction else "NEUTRAL",
+            "simulated_position_side": SIGNALS[plan.direction] if position else "",
             "close": candle.close, "direction": side_name(plan.direction if plan else setup.trend.direction),
             "status": decision.status, "array": ARRAY_LABELS[setup.trend.direction],
             "regime": setup.trend.regime, "btc_array": ARRAY_LABELS[market.direction],
@@ -182,6 +197,7 @@ def decision_rows(data: dict, averages: dict, decisions: dict, micro: dict) -> l
             "event_reference_price": decision.event_price, "stop_close_level": decision.stop,
             "stop_source": decision.stop_source,
             "stop_operator": ("<" if plan.direction == 1 else ">") if plan else "",
+            "take_profit_operator": (">=" if plan.direction == 1 else "<=") if plan else "",
             "allocation_assumption": "40/60 of USDT budget",
             "strategy_source": "user-provided rules", "video_directly_verified": False,
             "plan_kind": "simulated_position" if position else "conditional" if setup.ready else "watch_only",
@@ -202,7 +218,8 @@ def close_timestamp(open_ts: int | None) -> str:
     return utc_time(open_ts + BAR_MS["4H"]).isoformat() if open_ts is not None else ""
 
 
-def render(path: Path, data: dict, averages: dict, micro: dict, exit_style: str) -> None:
+def render(path: Path, data: dict, averages: dict, micro: dict, exit_style: str,
+           started_at: datetime) -> None:
     configure_font()
     btc, btc_sma = data["BTC", "4H"], averages["BTC", "4H"]
     market_history = [trend_at(btc, btc_sma, i) for i in range(364, len(btc))]
@@ -211,7 +228,8 @@ def render(path: Path, data: dict, averages: dict, micro: dict, exit_style: str)
         symbol: replay(data[symbol, "4H"], averages[symbol, "4H"], market_history, exit_style)
         for symbol in SYMBOLS
     }
-    rows = decision_rows(data, averages, decisions, micro)
+    evaluated_at = datetime.now(timezone.utc)
+    rows = decision_rows(data, averages, decisions, micro, started_at, evaluated_at)
     with (path / "entry_decisions.csv").open("w", encoding="utf-8-sig", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=list(rows[0]))
         writer.writeheader()
@@ -239,6 +257,8 @@ def render(path: Path, data: dict, averages: dict, micro: dict, exit_style: str)
                for period, color in COLORS.items()]
     fig.legend(handles=handles, ncol=6, loc="upper left", bbox_to_anchor=(.035, .907),
                frameon=False, labelcolor=MUTED, fontsize=9)
+    fig.text(.50, .963, f"{STRATEGY_VERSION}   /   평가 {evaluated_at.astimezone(KST):%Y-%m-%d %H:%M:%S} KST",
+             ha="center", color=MUTED, fontsize=10)
 
     for column, symbol in enumerate(SYMBOLS):
         candles = data[symbol, "4H"]
@@ -330,7 +350,7 @@ def main() -> None:
         staging.mkdir()
         for (symbol, bar), candles in data.items():
             write_csv(staging / f"{symbol}-USDT_{bar}.csv", candles, averages[symbol, bar])
-        render(staging, data, averages, micro, args.exit_style)
+        render(staging, data, averages, micro, args.exit_style, now)
         os.rename(staging, output)
     print(f"Saved {len(data) + 1} CSVs, dashboard.png and dashboard.pdf to {output}")
 

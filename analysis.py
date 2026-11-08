@@ -5,6 +5,7 @@ from statistics import fmean, median
 
 from okx_data import Candle
 
+STRATEGY_VERSION = "bitjjang-one-way-v1.0.0"
 COMPRESSION = 0.005
 EXPANSION_CHANGE = 0.001
 SLOPE_BARS = 6
@@ -13,6 +14,7 @@ STRUCTURE_BARS = 180
 ATR_BARS = 14
 FIRST_WEIGHT, SECOND_WEIGHT = 0.40, 0.60
 ARRAY_LABELS = {1: "정배열", -1: "역배열", 0: "혼조"}
+SIGNALS = {1: "LONG", -1: "SHORT", 0: "WAIT"}
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,12 @@ class Decision:
     event_ts: int | None
     event_price: float | None
     exit_style: str
+
+    @property
+    def entry_signal(self) -> str:
+        if self.position or not self.setup.ready:
+            return "WAIT"
+        return SIGNALS[self.setup.trend.direction]
 
 
 def side_name(direction: int) -> str:
@@ -148,7 +156,6 @@ def analyze_at(candles: list[Candle], sma: dict[int, list[float]], i: int,
     trend = trend_at(candles, sma, i)
     direction = trend.direction
     values = {period: series[i] for period, series in sma.items()}
-    signed_close = direction * close
     baseline = fmean(c.volume_quote for c in candles[i - 20:i])
     relative_volume = candle.volume_quote / baseline if baseline else None
     checks = {
@@ -231,9 +238,8 @@ def advance(position: Position | None, plan: Plan, candle: Candle,
     target = (plan.trend_target or plan.short_target) if exit_style == "trend" else (
         plan.short_target or plan.trend_target
     )
-    favorable = candle.high if direction == 1 else candle.low
-    if not event and target is not None and direction * (favorable - target) >= 0:
-        return None, "모의 익절", target
+    if not event and target is not None and direction * (candle.close - target) >= 0:
+        return None, "모의 익절", candle.close
     if position.filled_second and direction * (candle.close - sma60) > 0:
         position.sma60_armed = True
     return position, event, price
